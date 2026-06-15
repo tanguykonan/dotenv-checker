@@ -1,0 +1,31 @@
+{
+  "name": "dotenv-checker",
+  "version": "0.1.0",
+  "description": "CLI to detect missing, extra or inconsistent variables between all .env files",
+  "type": "module",
+  "main": "src/cli.js",
+  "bin": {
+    "dotenv-checker": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node tests/test.js"
+  },
+  "keywords": ["dotenv", "env", "cli", "checker", "devops", "environment"],
+  "author": "github.com/tanguykonan",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tanguykonan/dotenv-checker"
+  },
+  "homepage": "https://github.com/tanguykonan/dotenv-checker#readme",
+  "bugs": {
+    "url": "https://github.com/tanguykonan/dotenv-checker/issues"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2"
+  }
+}
