@@ -1,23 +1,15 @@
 /**
  * @file reporter.js
- * @description Formats and prints check results to stdout using chalk.
- *
- * All output follows the prefix convention:
- *   [ DOTENV-CHECKER ] [ LEVEL ] message
- *
- * Status tags used in reports:
- *   [ MISSING ] Key expected by .env.example but absent from .env
- *   [ EMPTY ]   Key present in .env but with no value
- *   [ EXTRA ]   Key in .env but not documented in .env.example
- *   [ OK ]      Key present and has a value
- *   [ ONLY-A ]  Key exists only in file A (compare mode)
- *   [ ONLY-B ]  Key exists only in file B (compare mode)
- *   [ SHARED ]  Key exists in both files (compare mode, verbose only)
- *
+ * @description Formats and prints check results to stdout using chalk or JSON.
  * @module reporter
  */
 
+import path from 'path';
 import chalk from 'chalk';
+
+if (process.env.NO_COLOR !== undefined || process.env.NODE_DISABLE_COLORS !== undefined) {
+  chalk.level = 0;
+}
 
 /** Shared prefix printed on every output line. */
 const PREFIX = chalk.blue.bold('[ DOTENV-CHECKER ]');
@@ -25,10 +17,10 @@ const PREFIX = chalk.blue.bold('[ DOTENV-CHECKER ]');
 /** Horizontal divider line. */
 const DIVIDER = chalk.dim('  ' + '─'.repeat(50));
 
-// ---------------------------------------------------------------------------
-// Status tag builders
-// ---------------------------------------------------------------------------
-
+/**
+ * Status tags used in report formatting.
+ * @type {Record<string, string>}
+ */
 const tag = {
   MISSING: chalk.bold.red('[ MISSING ]'),
   EMPTY:   chalk.bold.yellow('[ EMPTY ]'),
@@ -37,11 +29,10 @@ const tag = {
   ONLY_A:  chalk.bold.yellow('[ ONLY-A ]'),
   ONLY_B:  chalk.bold.blue('[ ONLY-B ]'),
   SHARED:  chalk.bold.green('[ SHARED ]'),
+  FIXED:   chalk.bold.cyan('[ FIXED ]'),
+  DRY_RUN: chalk.bold.magenta('[ DRY-RUN ]'),
+  BACKUP:  chalk.bold.gray('[ BACKUP ]'),
 };
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Prints a single result row with consistent alignment.
@@ -55,17 +46,13 @@ function row(statusTag, key, hint = '') {
   console.log(`    ${statusTag}  ${chalk.bold(key)}${hintStr}`);
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /**
  * Prints a full check report comparing a .env file against a .env.example file.
  *
  * @param  {import('./checker.js').CheckResults} results
  * @param  {Object}  options
- * @param  {boolean} [options.verbose=false]         - Also print OK keys
- * @param  {string}  [options.envFile='.env']         - Label for the env file
+ * @param  {boolean} [options.verbose=false]             - Also print OK keys
+ * @param  {string}  [options.envFile='.env']             - Label for the env file
  * @param  {string}  [options.exampleFile='.env.example'] - Label for the reference file
  * @returns {number} Total number of issues found (missing + empty + extra)
  */
@@ -109,8 +96,6 @@ export function report(results, { verbose = false, envFile = '.env', exampleFile
     console.log('');
   }
 
-  //console.log(DIVIDER);
-
   if (totalIssues === 0) {
     console.log(`  ${chalk.bold.green('[ OK ]')}  ${total} variable${total !== 1 ? 's' : ''} checked. All good.`);
   } else {
@@ -129,7 +114,6 @@ export function report(results, { verbose = false, envFile = '.env', exampleFile
 
 /**
  * Prints a symmetric diff report between two arbitrary .env files.
- * Used by the --compare mode. No notion of "reference" file here.
  *
  * @param  {Map}     entriesA
  * @param  {Map}     entriesB
@@ -151,8 +135,8 @@ export function reportCompare(entriesA, entriesB, { fileA, fileB, verbose = fals
     else                                          onlyB.push(key);
   }
 
-  const nameA = fileA.split('/').pop();
-  const nameB = fileB.split('/').pop();
+  const nameA = path.basename(fileA);
+  const nameB = path.basename(fileB);
 
   console.log('');
   console.log(DIVIDER);
@@ -184,7 +168,6 @@ export function reportCompare(entriesA, entriesB, { fileA, fileB, verbose = fals
   }
 
   const issues = onlyA.length + onlyB.length;
-  //console.log(DIVIDER);
 
   if (issues === 0) {
     console.log(`  ${chalk.bold.green('[ OK ]')}  Files are in sync. ${shared.length} shared variable${shared.length !== 1 ? 's' : ''}.`);
@@ -203,7 +186,6 @@ export function reportCompare(entriesA, entriesB, { fileA, fileB, verbose = fals
 
 /**
  * Prints a global summary after a full project scan.
- * Only shown when more than one .env file was checked.
  *
  * @param {Array<{ file: string, issues: number }>} allResults
  */
@@ -223,4 +205,45 @@ export function reportScanSummary(allResults) {
   }
 
   console.log('');
+}
+
+/**
+ * Prints formatted confirmation message when fixes are applied or simulated.
+ *
+ * @param {string}   envFile                - Display path of target file
+ * @param {string[]} addedKeys              - Array of injected variable keys
+ * @param {boolean}  created                - Whether target was created from reference
+ * @param {Object}   [options]
+ * @param {boolean}  [options.dryRun=false]        - True if fix was only simulated
+ * @param {boolean}  [options.backupCreated=false] - True if backup file was created
+ */
+export function reportFix(envFile, addedKeys, created = false, { dryRun = false, backupCreated = false } = {}) {
+  const activeTag = dryRun ? tag.DRY_RUN : tag.FIXED;
+
+  if (backupCreated) {
+    console.log(`    ${tag.BACKUP} Created backup: ${chalk.bold(`${envFile}.bak`)}`);
+  }
+
+  if (created) {
+    const action = dryRun ? 'Would create' : 'Created';
+    console.log(`    ${activeTag}  ${action} ${chalk.bold(envFile)} with ${chalk.bold(addedKeys.length)} variable${addedKeys.length !== 1 ? 's' : ''} from reference.`);
+    return;
+  }
+
+  if (addedKeys.length === 0) return;
+
+  const action = dryRun ? 'Would add' : 'Added';
+  console.log(`    ${activeTag}  ${action} ${chalk.bold(addedKeys.length)} missing variable${addedKeys.length !== 1 ? 's' : ''} to ${chalk.bold(envFile)}:`);
+  addedKeys.forEach(k => {
+    console.log(`           ${chalk.cyan('+')} ${chalk.bold(k)}`);
+  });
+}
+
+/**
+ * Outputs report data serialized in standard JSON format for tooling integration.
+ *
+ * @param {Object} data - Structured result data
+ */
+export function reportJson(data) {
+  console.log(JSON.stringify(data, null, 2));
 }
