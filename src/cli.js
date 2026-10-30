@@ -3,68 +3,71 @@
 /**
  * @file cli.js
  * @description Entry point of the dotenv-checker CLI.
- *
- * Responsible for:
- *  - Parsing command-line arguments (flags and options)
- *  - Selecting the correct execution mode based on provided arguments
- *  - Delegating file reading, comparison and output to dedicated modules
- *
- * Three execution modes are available:
- *
- *  1. SCAN MODE (default)
- *     Recursively scans the project directory for every .env* file,
- *     pairs each one with its matching reference file (.env.example,
- *     .env.template, .env.sample…), and runs a check on each pair.
- *     A global summary is printed at the end when multiple files are found.
- *
- *  2. EXPLICIT MODE  --env <path> --example <path>
- *     Checks a single, explicitly specified pair of files.
- *     Useful when files are not at the project root or have non-standard names.
- *
- *  3. COMPARE MODE  --compare <fileA> <fileB>
- *     Performs a symmetric diff between two arbitrary .env files.
- *     No reference file (.env.example) is required.
- *     Useful for comparing environments: staging vs production, branch A vs branch B.
- *
- * Exit codes:
- *  0  All checks passed — no issues detected
- *  1  One or more issues were detected (missing, empty or extra keys)
- *  2  A required file was not found or arguments are invalid
- *
  * @module cli
  */
 
+import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 
-import { parseEnvFile }                              from './parser.js';
-import { check }                                     from './checker.js';
-import { report, reportCompare, reportScanSummary }  from './reporter.js';
-import { scanProject, findMatchingReference }         from './scanner.js';
-
-// ---------------------------------------------------------------------------
-// ESM-compatible __dirname (not available natively in ESM modules)
-// ---------------------------------------------------------------------------
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-
-// ---------------------------------------------------------------------------
-// Logging helpers
-// ---------------------------------------------------------------------------
+import { parseEnvFile }                                                     from './parser.js';
+import { check }                                                            from './checker.js';
+import { report, reportCompare, reportScanSummary, reportFix, reportJson }  from './reporter.js';
+import { scanProject, findMatchingReference }                               from './scanner.js';
+import { fixEnvFile, syncReferenceFile }                                    from './fixer.js';
 
 /**
- * Prints a formatted prefix block used consistently across all CLI output.
+ * Raw command-line arguments excluding binary and script paths.
+ * @type {string[]}
+ */
+const args = process.argv.slice(2);
+
+const packageJsonPath = new URL('../package.json', import.meta.url);
+const { version } = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+
+/**
+ * Checks if a specific flag is passed via CLI args or npm config environment.
  *
- * Format:  [ DOTENV-CHECKER ] [ LEVEL ] message
+ * @param  {string}  flag - Flag identifier to search for
+ * @returns {boolean} True if the flag is present
+ */
+function getFlag(flag) {
+  const clean  = flag.replace(/^--?/, '').replace(/-/g, '_');
+  const envKey = `npm_config_${clean}`;
+  return args.some(arg => arg === flag || arg.startsWith(`${flag}=`)) || process.env[envKey] === 'true';
+}
+
+/**
+ * Retrieves the value of an option passed as `--key value`, `--key=value`, or npm config.
  *
- * @param {'ERROR'|'WARN'|'INFO'} level   - Severity level of the message
- * @param {string}                message - Human-readable message to display
+ * @param  {string}      option - Option identifier to look up
+ * @returns {string|null} Resolved option value or null if not provided
+ */
+function getOption(option) {
+  const clean  = option.replace(/^--?/, '').replace(/-/g, '_');
+  const envKey = `npm_config_${clean}`;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === option) {
+      const next = args[i + 1];
+      return (next && !next.startsWith('--')) ? next : null;
+    }
+    if (arg.startsWith(`${option}=`)) {
+      return arg.slice(option.length + 1);
+    }
+  }
+  return process.env[envKey] ?? null;
+}
+
+/**
+ * Prints a prefixed log message to standard output.
+ *
+ * @param {'ERROR'|'WARN'|'INFO'} level   - Severity of the message
+ * @param {string}                message - Human-readable text
  */
 function log(level, message) {
   const prefix = chalk.bold('[ DOTENV-CHECKER ]');
-
   const tag = {
     ERROR: chalk.bold.red('[ ERROR ]'),
     WARN:  chalk.bold.yellow('[ WARN ]'),
@@ -74,45 +77,14 @@ function log(level, message) {
   console.log(`${prefix} ${tag} ${message}`);
 }
 
-// ---------------------------------------------------------------------------
-// Argument parsing
-// ---------------------------------------------------------------------------
-
-/**
- * Raw argument list, excluding the Node.js binary and script path.
- * @type {string[]}
- */
-const args = process.argv.slice(2);
-
-/**
- * Returns true if the given flag is present in the argument list.
- *
- * @param  {string}  flag - Flag to look for (e.g. '--verbose')
- * @returns {boolean}
- */
-function getFlag(flag) {
-  return args.includes(flag);
+if (getFlag('--version') || getFlag('-V')) {
+  console.log(`v${version}`);
+  process.exit(0);
 }
-
-/**
- * Returns the value immediately following the given option flag.
- * Returns null if the flag is absent or has no following value.
- *
- * @param  {string}      option - Option flag (e.g. '--env')
- * @returns {string|null}
- */
-function getOption(option) {
-  const index = args.indexOf(option);
-  return index !== -1 ? args[index + 1] ?? null : null;
-}
-
-// ---------------------------------------------------------------------------
-// Help screen
-// ---------------------------------------------------------------------------
 
 if (getFlag('--help') || getFlag('-h')) {
   console.log(`
-  ${chalk.bold.cyan('[ DOTENV-CHECKER ]')}  ${chalk.dim('v0.1.0')}
+  ${chalk.bold.cyan('[ DOTENV-CHECKER ]')}  ${chalk.dim(`v${version}`)}
 
   ${chalk.bold('USAGE')}
 
@@ -120,7 +92,7 @@ if (getFlag('--help') || getFlag('-h')) {
 
   ${chalk.bold('MODES')}
 
-    ${chalk.bold('(default)')}               Scan the whole project for .env files
+    ${chalk.bold('(default)')}               Scan workspace recursively for .env files
     ${chalk.bold('--env / --example')}       Check a specific pair of files
     ${chalk.bold('--compare <A> <B>')}       Compare two .env files directly
 
@@ -130,7 +102,12 @@ if (getFlag('--help') || getFlag('-h')) {
     ${chalk.bold('--example')}  <path>       Path to your .env.example file    ${chalk.dim('(default: .env.example)')}
     ${chalk.bold('--compare')}  <A> <B>      Compare two env files side by side
     ${chalk.bold('--dir')}      <path>       Root directory to scan            ${chalk.dim('(default: current dir)')}
-    ${chalk.bold('--verbose')}, ${chalk.bold('-v')}          Also show valid / shared variables
+    ${chalk.bold('--fix')}                   Automatically synchronize all .env and template files
+    ${chalk.bold('--dry-run')}               Simulate fixes without writing changes to disk
+    ${chalk.bold('--backup')}                Create a .env.bak backup before modifying files
+    ${chalk.bold('--json')}                  Output machine-readable JSON results
+    ${chalk.bold('--verbose')}, ${chalk.bold('-v')}          Also show valid and shared variables
+    ${chalk.bold('--version')}, ${chalk.bold('-V')}          Display version information
     ${chalk.bold('--help')},    ${chalk.bold('-h')}          Show this help
 
   ${chalk.bold('EXIT CODES')}
@@ -144,38 +121,43 @@ if (getFlag('--help') || getFlag('-h')) {
     ${chalk.dim('# Scan the entire project')}
     dotenv-checker
 
-    ${chalk.dim('# Scan a specific subfolder')}
-    dotenv-checker --dir ./backend
+    ${chalk.dim('# Automatically synchronize all env files and templates')}
+    dotenv-checker --fix
 
-    ${chalk.dim('# Check a specific pair')}
-    dotenv-checker --env .env.local --example .env.example
+    ${chalk.dim('# Preview fixes with dry-run and create backup')}
+    dotenv-checker --fix --dry-run
+    dotenv-checker --fix --backup
 
-    ${chalk.dim('# Compare two environments')}
+    ${chalk.dim('# Output results as JSON for CI/CD pipelines')}
+    dotenv-checker --json
+
+    ${chalk.dim('# Compare staging and production environments')}
     dotenv-checker --compare .env.staging .env.production
   `);
   process.exit(0);
 }
 
-// ---------------------------------------------------------------------------
-// Shared option: --verbose
-// ---------------------------------------------------------------------------
-
-/** @type {boolean} When true, valid/shared keys are also printed in the report. */
 const verbose = getFlag('--verbose') || getFlag('-v');
+const json    = getFlag('--json');
+const fix     = getFlag('--fix');
+const dryRun  = getFlag('--dry-run');
+const backup  = getFlag('--backup');
 
-// ---------------------------------------------------------------------------
-// MODE 1 — COMPARE  --compare <fileA> <fileB>
-// ---------------------------------------------------------------------------
-
+/**
+ * Execution Mode 1: Direct comparison between two specific .env files.
+ */
 const compareIndex = args.indexOf('--compare');
 
 if (compareIndex !== -1) {
+  if (fix && !json) {
+    log('WARN', '--fix is not applicable in --compare mode (use explicit --env and --example to synchronize).');
+  }
+
   const rawA = args[compareIndex + 1];
   const rawB = args[compareIndex + 2];
 
-  // Validate that both arguments are present and are not other flags
   if (!rawA || !rawB || rawA.startsWith('--') || rawB.startsWith('--')) {
-    log('ERROR', '--compare requires two file paths:  --compare <fileA> <fileB>');
+    if (!json) log('ERROR', '--compare requires two file paths:  --compare <fileA> <fileB>');
     process.exit(2);
   }
 
@@ -186,23 +168,46 @@ if (compareIndex !== -1) {
   const entriesB = parseEnvFile(pathB);
 
   if (!entriesA) {
-    log('ERROR', `File not found: ${chalk.underline(pathA)}`);
+    if (!json) log('ERROR', `File not found: ${chalk.underline(pathA)}`);
     process.exit(2);
   }
 
   if (!entriesB) {
-    log('ERROR', `File not found: ${chalk.underline(pathB)}`);
+    if (!json) log('ERROR', `File not found: ${chalk.underline(pathB)}`);
     process.exit(2);
+  }
+
+  if (json) {
+    const onlyA   = [];
+    const onlyB   = [];
+    const shared  = [];
+    const allKeys = new Set([...entriesA.keys(), ...entriesB.keys()]);
+
+    for (const key of allKeys) {
+      if (entriesA.has(key) && entriesB.has(key)) shared.push(key);
+      else if (entriesA.has(key))                  onlyA.push(key);
+      else                                          onlyB.push(key);
+    }
+
+    reportJson({
+      mode: 'compare',
+      fileA: pathA,
+      fileB: pathB,
+      onlyA,
+      onlyB,
+      shared,
+      issues: onlyA.length + onlyB.length,
+    });
+    process.exit(onlyA.length + onlyB.length > 0 ? 1 : 0);
   }
 
   const issues = reportCompare(entriesA, entriesB, { fileA: pathA, fileB: pathB, verbose });
   process.exit(issues > 0 ? 1 : 0);
 }
 
-// ---------------------------------------------------------------------------
-// MODE 2 — EXPLICIT  --env <path> --example <path>
-// ---------------------------------------------------------------------------
-
+/**
+ * Execution Mode 2: Explicit pair check (--env <path> --example <path>).
+ */
 const explicitEnv     = getOption('--env');
 const explicitExample = getOption('--example');
 
@@ -213,85 +218,220 @@ if (explicitEnv || explicitExample) {
   const envPath     = path.resolve(process.cwd(), envFile);
   const examplePath = path.resolve(process.cwd(), exampleFile);
 
-  const envEntries     = parseEnvFile(envPath);
-  const exampleEntries = parseEnvFile(examplePath);
+  let exampleEntries = parseEnvFile(examplePath);
+  let envEntries     = parseEnvFile(envPath);
+
+  if (!exampleEntries && !fs.existsSync(examplePath)) {
+    if (fix && envEntries) {
+      const syncRes = syncReferenceFile(examplePath, envEntries, { dryRun, backup });
+      if (!json) reportFix(exampleFile, syncRes.addedKeys, true, { dryRun, backupCreated: syncRes.backupCreated });
+      exampleEntries = parseEnvFile(examplePath);
+    } else {
+      if (!json) log('ERROR', `File not found: ${chalk.underline(examplePath)}`);
+      process.exit(2);
+    }
+  }
+
+  let fixReport = null;
 
   if (!envEntries) {
-    log('ERROR', `File not found: ${chalk.underline(envPath)}`);
-    process.exit(2);
+    if (fix && exampleEntries) {
+      fixReport = fixEnvFile(envPath, examplePath, undefined, exampleEntries, { dryRun, backup });
+      if (!json) reportFix(envFile, fixReport.addedKeys, true, { dryRun, backupCreated: fixReport.backupCreated });
+      if (!dryRun) envEntries = parseEnvFile(envPath);
+    } else {
+      if (!json) log('ERROR', `File not found: ${chalk.underline(envPath)}`);
+      process.exit(2);
+    }
   }
 
-  if (!exampleEntries) {
-    log('ERROR', `File not found: ${chalk.underline(examplePath)}`);
-    process.exit(2);
+  if (fix && envEntries && exampleEntries) {
+    const checkBefore = check(envEntries, exampleEntries);
+
+    if (checkBefore.extra.length > 0) {
+      const syncRes = syncReferenceFile(examplePath, envEntries, { dryRun, backup });
+      if (!json && syncRes.addedKeys.length > 0) {
+        reportFix(exampleFile, syncRes.addedKeys, syncRes.created, { dryRun, backupCreated: syncRes.backupCreated });
+      }
+      if (!dryRun) exampleEntries = parseEnvFile(examplePath);
+    }
+
+    if (checkBefore.missing.length > 0) {
+      fixReport = fixEnvFile(envPath, examplePath, checkBefore.missing, exampleEntries, { dryRun, backup });
+      if (!json && fixReport.addedKeys.length > 0) {
+        reportFix(envFile, fixReport.addedKeys, false, { dryRun, backupCreated: fixReport.backupCreated });
+      }
+      if (!dryRun) envEntries = parseEnvFile(envPath);
+    }
   }
 
-  const results = check(envEntries, exampleEntries);
-  const issues  = report(results, { verbose, envFile, exampleFile });
+  const results = (envEntries && exampleEntries)
+    ? check(envEntries, exampleEntries)
+    : { missing: [], extra: [], empty: [], ok: [] };
+
+  if (json) {
+    reportJson({
+      mode: 'explicit',
+      envFile,
+      exampleFile,
+      results,
+      fix: fixReport,
+      issues: results.missing.length + results.extra.length + results.empty.length,
+    });
+    process.exit(results.missing.length + results.extra.length + results.empty.length > 0 ? 1 : 0);
+  }
+
+  const issues = report(results, { verbose, envFile, exampleFile });
   process.exit(issues > 0 ? 1 : 0);
 }
 
-// ---------------------------------------------------------------------------
-// MODE 3 — SCAN (default)
-// ---------------------------------------------------------------------------
-
+/**
+ * Execution Mode 3: Automatic workspace scan with directory-level consistency.
+ */
 const rootDir = path.resolve(process.cwd(), getOption('--dir') ?? '.');
 
 const { envFiles, referenceFiles } = scanProject(rootDir);
 
-// Nothing to check
 if (envFiles.length === 0 && referenceFiles.length === 0) {
-  log('INFO', 'No .env files found in this directory.');
+  if (json) {
+    reportJson({ mode: 'scan', files: [], summary: { total: 0, issues: 0 } });
+  } else {
+    log('INFO', 'No .env files found in this directory.');
+  }
   process.exit(0);
 }
 
-/** @type {Array<{ file: string, issues: number }>} */
-const allResults = [];
+// Group all discovered files by their directory
+const dirMap = new Map();
 
-/** @type {number} Running total of issues across all checked files. */
-let totalIssues = 0;
-
-// -- Check each .env file against its matching reference -------------------
-
-for (const envFilePath of envFiles) {
-  const referenceFilePath = findMatchingReference(envFilePath, referenceFiles);
-  const relativeEnvPath   = path.relative(rootDir, envFilePath);
-
-  if (!referenceFilePath) {
-    log('WARN', `${chalk.underline(relativeEnvPath)}  —  no .env.example found, skipped.`);
-    continue;
-  }
-
-  const relativeRefPath = path.relative(rootDir, referenceFilePath);
-  const envEntries      = parseEnvFile(envFilePath);
-  const refEntries      = parseEnvFile(referenceFilePath);
-
-  const results = check(envEntries, refEntries);
-  const issues  = report(results, {
-    verbose,
-    envFile:     relativeEnvPath,
-    exampleFile: relativeRefPath,
-  });
-
-  totalIssues += issues;
-  allResults.push({ file: relativeEnvPath, issues });
+for (const envPath of envFiles) {
+  const dir = path.dirname(envPath);
+  if (!dirMap.has(dir)) dirMap.set(dir, { envs: [], refs: [] });
+  dirMap.get(dir).envs.push(envPath);
 }
-
-// -- Mention reference files that have no matching .env --------------------
 
 for (const refPath of referenceFiles) {
-  const refDir   = path.dirname(refPath);
-  const hasMatch = envFiles.some(f => path.dirname(f) === refDir);
+  const dir = path.dirname(refPath);
+  if (!dirMap.has(dir)) dirMap.set(dir, { envs: [], refs: [] });
+  dirMap.get(dir).refs.push(refPath);
+}
 
-  if (!hasMatch) {
-    const relRef = path.relative(rootDir, refPath);
-    log('WARN', `${chalk.underline(relRef)}  —  reference file with no matching .env.`);
+const allResults = [];
+let totalIssues = 0;
+
+for (const [dir, group] of dirMap) {
+  // Collect union of all keys defined across all files in this directory
+  const allKnownKeys = new Map();
+
+  for (const filePath of [...group.envs, ...group.refs]) {
+    const parsed = parseEnvFile(filePath);
+    if (parsed) {
+      for (const [k, v] of parsed) {
+        if (!allKnownKeys.has(k)) {
+          allKnownKeys.set(k, v);
+        }
+      }
+    }
+  }
+
+  // Identify or establish reference template file for this directory
+  let primaryRefPath = group.refs[0] ?? null;
+
+  if (!primaryRefPath && group.envs.length > 0) {
+    primaryRefPath = path.join(dir, '.env.example');
+  }
+
+  // Synchronize reference template if it is missing keys present in environment files
+  if (primaryRefPath && allKnownKeys.size > 0) {
+    const refRelative = path.relative(rootDir, primaryRefPath);
+    let refEntries    = parseEnvFile(primaryRefPath) ?? new Map();
+
+    const missingInRef = Array.from(allKnownKeys.keys()).filter(k => !refEntries.has(k));
+
+    if (missingInRef.length > 0) {
+      if (fix) {
+        const syncRes = syncReferenceFile(primaryRefPath, allKnownKeys, { dryRun, backup });
+        if (!json && syncRes.addedKeys.length > 0) {
+          reportFix(refRelative, syncRes.addedKeys, syncRes.created, { dryRun, backupCreated: syncRes.backupCreated });
+        }
+        if (!dryRun) {
+          refEntries = parseEnvFile(primaryRefPath) ?? new Map();
+          if (!group.refs.includes(primaryRefPath)) group.refs.push(primaryRefPath);
+        }
+      }
+    }
+  }
+
+  // Effective reference entries: populated reference or union of all known keys in the directory
+  let effectiveRefEntries = (primaryRefPath && fs.existsSync(primaryRefPath))
+    ? (parseEnvFile(primaryRefPath) ?? new Map())
+    : allKnownKeys;
+
+  if (effectiveRefEntries.size === 0 && allKnownKeys.size > 0) {
+    effectiveRefEntries = allKnownKeys;
+  }
+
+  // Check each environment file in this directory
+  for (const envFilePath of group.envs) {
+    const relativeEnvPath = path.relative(rootDir, envFilePath);
+    const targetRefPath   = findMatchingReference(envFilePath, group.refs) ?? primaryRefPath;
+    const relativeRefPath = targetRefPath ? path.relative(rootDir, targetRefPath) : '.env.example';
+
+    let envEntries = parseEnvFile(envFilePath) ?? new Map();
+    let refEntries = (targetRefPath && fs.existsSync(targetRefPath))
+      ? (parseEnvFile(targetRefPath) ?? new Map())
+      : effectiveRefEntries;
+
+    if (refEntries.size === 0 && effectiveRefEntries.size > 0) {
+      refEntries = effectiveRefEntries;
+    }
+
+    let results = check(envEntries, refEntries);
+
+    if (fix && results.missing.length > 0 && targetRefPath) {
+      const fixReport = fixEnvFile(envFilePath, targetRefPath, results.missing, refEntries, { dryRun, backup });
+      if (!json && fixReport.addedKeys.length > 0) {
+        reportFix(relativeEnvPath, fixReport.addedKeys, false, { dryRun, backupCreated: fixReport.backupCreated });
+      }
+      if (!dryRun) {
+        envEntries = parseEnvFile(envFilePath) ?? new Map();
+        results    = check(envEntries, refEntries);
+      }
+    }
+
+    const issues = results.missing.length + results.extra.length + results.empty.length;
+    totalIssues += issues;
+
+    if (json) {
+      allResults.push({
+        file: relativeEnvPath,
+        reference: relativeRefPath,
+        results,
+        issues,
+      });
+    } else {
+      report(results, {
+        verbose,
+        envFile:     relativeEnvPath,
+        exampleFile: relativeRefPath,
+      });
+      allResults.push({ file: relativeEnvPath, issues });
+    }
   }
 }
 
-// -- Global summary (only relevant when more than one file was checked) ----
-
-if (allResults.length > 1) {
+if (json) {
+  reportJson({
+    mode: 'scan',
+    files: allResults,
+    summary: {
+      totalFiles: allResults.length,
+      totalIssues,
+      cleanFiles: allResults.filter(r => r.issues === 0).length,
+      failedFiles: allResults.filter(r => r.issues > 0).length,
+    },
+  });
+} else if (allResults.length > 1) {
   reportScanSummary(allResults);
 }
 
