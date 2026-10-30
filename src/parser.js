@@ -14,8 +14,34 @@ import fs from 'fs';
  */
 
 /**
+ * Extracts and sanitizes the variable value, handling quotes and inline comments.
+ *
+ * @param  {string} rawValue - Raw string to the right of the equals sign
+ * @returns {string} Sanitized variable value
+ */
+function parseValue(rawValue) {
+  const trimmed = rawValue.trim();
+  if (!trimmed) return '';
+
+  const firstChar = trimmed[0];
+  if (firstChar === '"' || firstChar === "'") {
+    const closingIndex = trimmed.indexOf(firstChar, 1);
+    if (closingIndex !== -1) {
+      return trimmed.slice(1, closingIndex);
+    }
+  }
+
+  const commentIndex = trimmed.indexOf('#');
+  if (commentIndex !== -1) {
+    return trimmed.slice(0, commentIndex).trim();
+  }
+
+  return trimmed;
+}
+
+/**
  * Parses a .env file and returns a Map of key -> EnvEntry.
- * Supports: KEY=VALUE, KEY="VALUE WITH SPACES", KEY= (empty), # comments, blank lines.
+ * Supports: KEY=VALUE, export KEY=VALUE, quoted values, inline comments (#), and empty values.
  *
  * @param  {string} filePath - Absolute path to the .env file
  * @returns {Map<string, EnvEntry>|null} Parsed entries, or null if file does not exist
@@ -23,7 +49,7 @@ import fs from 'fs';
 export function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return null;
 
-  const lines   = fs.readFileSync(filePath, 'utf-8').split('\n');
+  const lines   = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/);
   const entries = new Map();
 
   lines.forEach((rawLine, index) => {
@@ -33,16 +59,15 @@ export function parseEnvFile(filePath) {
     const eqIndex = line.indexOf('=');
     if (eqIndex === -1) return;
 
-    const key = line.slice(0, eqIndex).trim();
+    let key = line.slice(0, eqIndex).trim();
+    if (key.startsWith('export ')) {
+      key = key.slice(7).trim();
+    }
+
     if (!key) return;
 
-    let value = line.slice(eqIndex + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
+    const rawValue = line.slice(eqIndex + 1);
+    const value = parseValue(rawValue);
 
     entries.set(key, { value, line: index + 1, hasValue: value.length > 0 });
   });
