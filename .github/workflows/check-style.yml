@@ -1,0 +1,35 @@
+name: Check Style
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-style-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  style:
+    name: Code Syntax and Style Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate JavaScript Syntax
+        run: npm run lint
