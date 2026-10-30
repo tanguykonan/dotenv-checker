@@ -4,8 +4,7 @@
 
 # dotenv-checker
 
-**Stop shipping broken environments.**  
-Catch missing, empty, and undocumented `.env` variables before they cause issues.
+Validate and synchronize environment variables across your project.
 
 ![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
@@ -15,42 +14,40 @@ Catch missing, empty, and undocumented `.env` variables before they cause issues
 
 ---
 
-## Why
+## Overview
 
-A teammate clones the repo. You renamed a variable last week. The app starts, fails silently, and nobody knows why.
+dotenv-checker keeps environment files consistent across your workspace. It detects missing, empty, and undocumented keys across your environment files and reference templates, with built-in tools to synchronize them safely.
 
-`dotenv-checker` runs in one command and tells you exactly what's wrong.
-
----
-
-## Features
-
-- Scans your **entire project** for every `.env*` file automatically
-- Detects **missing**, **empty**, and **undocumented** keys
-- Compares **any two env files** directly: staging vs production, local vs CI
-- Zero config, no setup required
-- 1 dependency (`chalk`)
+- Scans projects recursively to find all env files
+- Validates values against template files (.env.example)
+- Diffs environments directly (such as staging against production)
+- Synchronizes missing variables across files safely
+- Outputs JSON for CI pipelines and automated checks
+- Single dependency with zero configuration required
 
 ---
 
 ## Installation
 
+Install globally using npm:
+
 ```bash
-git clone https://github.com/tanguykonan/dotenv-checker.git
-cd dotenv-checker
 npm install -g .
 ```
 
-`dotenv-checker` is then available anywhere in your terminal.
-NOTE: You can delete the repository from your computer.
+You can also run it directly without installing:
+
+```bash
+npx dotenv-checker
+```
 
 ---
 
 ## Usage
 
-### Scan the whole project *(default)*
+### Workspace Scan
 
-Recursively finds every `.env*` file, pairs each one with its `.env.example`, and reports all issues at once.
+Run the tool at your project root to scan for all env files and compare them with their matching templates:
 
 ```bash
 dotenv-checker
@@ -65,9 +62,9 @@ dotenv-checker --dir ./backend
 
 ---
 
-### Compare two env files directly
+### Environment Comparison
 
-No `.env.example` needed. Useful for diffing environments or branches.
+Compare two environment files directly without requiring a reference template:
 
 ```bash
 dotenv-checker --compare .env.staging .env.production
@@ -79,7 +76,9 @@ dotenv-checker --compare .env.staging .env.production
 
 ---
 
-### Check a specific pair
+### Single File Validation
+
+Check a specific environment file against an explicit template:
 
 ```bash
 dotenv-checker --env .env.local --example .env.example
@@ -87,54 +86,48 @@ dotenv-checker --env .env.local --example .env.example
 
 ---
 
-## Options
+### Automatic Synchronization
 
-| Flag | Default | Description |
-|---|---|---|
-| `--dir <path>` | `.` | Root directory for project scan |
-| `--env <path>` | `.env` | Path to your env file |
-| `--example <path>` | `.env.example` | Path to your example file |
-| `--compare <A> <B>` | - | Compare two env files side by side |
-| `--verbose`, `-v` | false | Also show valid / shared keys |
-| `--help`, `-h` | - | Show usage |
+Synchronize missing variables across all your files:
+
+```bash
+# Update all env files and templates
+dotenv-checker --fix
+
+# Preview changes without writing to disk
+dotenv-checker --fix --dry-run
+
+# Create a backup before making changes
+dotenv-checker --fix --backup
+```
+
+Existing keys, local values, and custom comments are never overwritten.
 
 ---
 
-## Exit codes
+### CI Integration
 
-| Code | Meaning |
-|---|---|
-| `0` | No issues found |
-| `1` | One or more issues detected |
-| `2` | File not found or invalid arguments |
-
-Works well in CI pipelines: exit code `1` blocks the pipeline when `.env` is out of sync.
+dotenv-checker returns exit code 0 when all environments are valid, and exit code 1 when discrepancies are found:
 
 ```yaml
-# GitHub Actions
-- name: Check .env consistency
-  run: dotenv-checker --env .env.ci --example .env.example
+- name: Check Environment Consistency
+  run: npx dotenv-checker --env .env.ci --example .env.example
+```
+
+You can also export structured results to JSON:
+
+```bash
+dotenv-checker --json
 ```
 
 ---
 
-## Project structure
+## Command Reference
 
-```
-dotenv-checker/
-├── src/
-│   ├── cli.js         # entry point, argument parsing, mode selection
-│   ├── parser.js      # reads and decodes .env files into a Map
-│   ├── checker.js     # compares two Maps and categorizes keys
-│   ├── reporter.js    # formats and prints results with chalk
-│   └── scanner.js     # recursively finds all .env* files in the project
-├── tests/
-│   └── test.js        # test suite for parser and checker
-└── assets/            # screenshots used in this README
-```
+For the complete list of flags, parameters, and exit codes, see the [Command Reference](docs/commands.md).
 
 ---
 
 ## License
 
-MIT - [tanguykonan](https://github.com/tanguykonan)
+MIT - [tanguykonan](https://tanguykonan.dev)
