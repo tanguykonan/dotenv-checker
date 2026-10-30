@@ -11,6 +11,9 @@ import path from 'path';
 const IGNORE_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build',
   '.next', '.nuxt', 'coverage', '.cache',
+  '.turbo', '.terraform', '.output', '.yarn',
+  'vendor', '.venv', 'venv', 'env',
+  '.husky', '.idea', '.vscode', 'tmp', 'temp',
 ]);
 
 /** Patterns that identify a file as a reference/template (not a real env file). */
@@ -92,5 +95,6 @@ export function findMatchingReference(envFilePath, referenceFiles) {
     path.join(dir, '.env.sample'),
   ];
 
-  return candidates.find(c => referenceFiles.includes(c)) ?? null;
+  const normalizedRefs = new Set(referenceFiles.map(f => path.resolve(f)));
+  return candidates.find(c => normalizedRefs.has(path.resolve(c))) ?? null;
 }
