@@ -6,7 +6,7 @@
 
 Validate and synchronize environment variables across your project.
 
-![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen?style=flat-square)
+![Node.js](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 ![Dependencies](https://img.shields.io/badge/dependencies-1-orange?style=flat-square)
 
